@@ -1,6 +1,6 @@
 ﻿# -*- coding: utf-8 -*-
-''' 
-Python Recursive Serializer, PRSerializer 0.1.3
+'''
+Python Recursive Serializer, PRSerializer 0.1.4
 Felipe A. Hernandez
 spayder26 at gmail dot com
 
@@ -11,27 +11,22 @@ License:
 Usage:
     Like pickle, this module has both dumps and loads functions. But
     serializable classes must be registered for security reasons and
-    they must use __getstate__ and __setstate__ methods for pickling.
-    
+    they must have both __getstate__ and __setstate__ methods for
+    pickling and unpickling respectively.
+
 Functions:
-    * register( class_object [, str_class_alias] )
-      Classes.register( class_object [, str_class_alias] )
-        Receives any class type (not an instance), and it will be
-        assumed as serializable by Serializer.
+    * serializable( class_object or str_class_alias [, str_class_alias] )
+      SerializerClass.serializable( class_object or str_class_alias [, str_class_alias] )
+        It receives any class type, and it will be registered by
+        Serializer.
+        If str_class_alias is given instead class_object as first
+        parameter, a new decorator function will be returned for
+        registering the classType with given alias.
         Received classtypes must have both __getstate__ and __setstate__
         methods, __getstate__ must return a serializable object that
         __setstate__ will receive when unserializing.
 
-    * serializable( class_object [, str_class_alias] )
-      Classes.serializable( class_object [, str_class_alias] )
-        Same as register and Classes.register, but without alias and
-        returns given class instance.
         Can be used as class decorator @serializable [ ( str_class_alias ) ] in Python 2.6+.
-
-    * Classes.serial ( obj, __getstate__serializer_callback, int_level)
-      Classes.unserial ( serial_str, __getstate__unserializer_callback, int_level)
-        Used by Serializer methods to serial and unserial class
-        instances. Only useful when inheriting from SerializerClass.
 
     * dumps( serializable_object [, unused_protocol ] )
       Serializer.dumps( serializable_object [, unused_protocol ] )
@@ -51,7 +46,8 @@ Functions:
 
 Exceptions:
     * ClassRegistrationError
-        Raises when there is an error in a Classes method.
+        Raises when a ClassType do not meet requirement's as described
+        above.
 
     * SerializationError
         Raises when trying to serialize and unsuported object or
@@ -73,10 +69,11 @@ Notes:
       longer than last one (protocol 2 on 2.6), but works better with
       compresion.
     * Uses only printable characters.
-    
-Example:
-    from PRSerializer import register, loads, dumps
 
+Example:
+    from PRSerializer import serializable, loads, dumps
+
+    @serializable(myclass) # PRSerializer needs class registration
     class MyClass(object):
         foo = True
         bar = None
@@ -94,28 +91,24 @@ Example:
             self.foo = o[0]
             self.bar = o[1]
 
-    # PRSerializer needs class registration
-    register(MyClass)
-
-    # We work with our class as usual
     instance = MyClass()
-    instance.foo = "Text string" 
+    instance.foo = "Text string"
 
     # Serialization
     a = dumps(instance)
-    print "Serialized string:", a
+    print "Serialized string:", repr(a)
 
-    # Deserialization
+    # Unserialization
     b = loads(a)
     print "Instance:", repr(b)
 '''
 
-__all__ = ("Serializer","Classes","ClassRegistrarionError",
-           "SerializationError","UnserializationError",
-           "dumps","loads","register")
+import sys
+import types
+
 __author__ = "Felipe A. Hernandez"
 __authemail__ = "spayder26 at gmail dot com"
-__version__ = "0.1.3"
+__version__ = "0.1.4"
 __license__ = "LGPLv3"
 
 class ClassRegistrarionError(Exception):
@@ -130,103 +123,72 @@ class UnserializationError(IOError):
     '''Unserialization exceptions'''
     pass
 
-class Classes(object):
-    '''Static class for class registering and manipulation.'''
-    __classAlias = {} # Static dictionary
-    __aliasClass = {} # Static dictionary
-    hasClass = __classAlias.__contains__
-    hasAlias = __aliasClass.__contains__
-
-    @classmethod
-    def register(self, cl, alias = None):
-        '''Mark classtype as serializable.
-        
-        Args:
-            cl: class type.
-            alias: class name will be used on serialized string, if None
-                   class.__name__ will be used, defaults to None.'''
-        if hasattr(cl,"__setstate__") and hasattr(cl,"__getstate__"):
-            if not alias: alias = cl.__name__
-            self.__classAlias[cl] = alias
-            self.__aliasClass[alias] = cl
-        else:
-            raise ClassRegistrarionError,"Serializable classes must have __setstate__ and __getstate__ methods."
-
-    @classmethod
-    def serializable(self, cl):
-        '''Class decorator support for classtype registration.
-        
-        Args:
-            cl: class type.
-            alias: class name will be used on serialized string, if None
-                   class.__name__ will be used, defaults to None.
-            
-        Returns:
-            Given classtype.'''
-        self.register(cl)
-        return cl
-
-    @classmethod
-    def unserial(self, x, dumper, l = 0):
-        '''Unserialize class object.
-        
-        Args:
-            x: serialized object string.
-            dumper: function will be used for unserialize object state
-                    (serialized __getstate__ return value), which will be
-                    given, once unserialized, to __setstate__ method.
-            l: current recursion level, defaults to 0.
-            
-        Returns:
-            Class object instance.'''
-        s = x.find(":")
-        try:
-            obj = self.__aliasClass[unescapeStr(x[:s])]
-            obj = obj.__new__(obj) if hasattr(obj,"__new__") else obj()
-            obj.__setstate__(dumper(x[s+1:],l))
-            return obj
-        except KeyError:
-            raise ClassRegistrarionError," %s is not registered." % x[:s]
-
-    @classmethod
-    def serial(self, x, dumper, l = 0):
-        '''Serialize class object.
-        
-        Args:
-            x: class object instance.
-            dumpler: function will be used for serialize object state as
-                     returned by __getstate__.
-            l: current recursion level, defaults to 0.
-            
-        Returns:
-            Serialized class as string.'''
-        try:
-            return "%s:%s" % (escapeStr(self.__classAlias[x.__class__]), dumper(x.__getstate__(),l))
-        except KeyError:
-            raise ClassRegistrarionError,"%s not registered" % x.__class__.__name__
-
 class SerializerClass(object):
     '''Serializer and unserializer class.'''
 
-    detect_range = True # You can manually disable range-generated list autodetection
-    
-    def __init__(self, detect_range = True):
-        '''Initializes the serializer-unserializer class.
-        
-        Args:
-            detect_range: False if you want to disable the range-generated list
-                          detection algorithm. True by default.'''
-        self.detect_range = detect_range
+    __detect_range = sys.version_info[0] < 3
 
-    def __serialRange(self, x, level, p = ""):
-        '''Auxiliar analyzer for xrange/range params.
+    def __init__(self):
+        '''Initializes the serializer-unserializer class.'''
+        self.__classAlias = {}
+        self.__aliasClass = {}
+        self.__classGetState = {}
+        self.__classSetState = {}
         
+    def serializable(self, class_or_alias = None, alias = None, getstate = None, setstate = None):
+        '''Mark classtype as serializable. Usable as class decorator.
+
+        Args:
+            class_or_alias: optional, class, or alias if string is given.
+            alias: optional, alias as string, incompatible with class_or_alias as alias.
+            getstate: optional, function whose return will be serialized.
+            setstate: optional, function will be called with unserialized data.
+
+        Returns:
+            Decorator if no ClassType is given in class_or_alias, or the
+            same ClassType given in class_or_alias if given.
+
+        Usage:
+            
+            @serializer.serializable(alias, getstate = lambda self, data:)
+            '''
+        if type(class_or_alias) in (types.StringType, types.NoneType):
+            assert alias is None or class_or_alias is None, "Alias cannot be given twice (class_or_alias and alias parameters are both exclusives)."
+            return lambda x: self.serializable(x, class_or_alias or alias, getstate, setstate)
+
+        if alias is None:
+            alias = class_or_alias.__name__
+            if alias in self.__aliasClass:
+                raise ClassRegistrarionError, "Two (or more) classes have the same name, please provide aliases."
+
+        try:
+            if getstate is None:
+                getstate = class_or_alias.__getstate__
+        except AttributeError:
+            raise ClassRegistrarionError,"Serializable classes must have an __getstate__ method if not 'getstate' parameter is given."
+
+        try:
+            if setstate is None:
+                setstate = class_or_alias.__setstate__
+        except AttributeError:
+            raise ClassRegistrarionError,"Serializable classes must have an __setstate__ method if not 'setstate' parameter is given."
+
+        self.__classAlias[class_or_alias] = alias
+        self.__classGetState[class_or_alias] = getstate
+        self.__classSetState[class_or_alias] = setstate
+        self.__aliasClass[alias] = class_or_alias
+
+        return class_or_alias
+
+    def __serialRange(self, x, level, p="x"):
+        '''Auxiliar analyzer for xrange/range params.
+
         Args:
             x: range-generated list or xrange iterator.
             level: current recursion level.
-            p: string which will be prepended to output. Defaults to x
-               (xrange).
-            
+            p: string which will be prepended to output.
+               Defaults to x (xrange).
+
         Returns:
             Serialized xrange or range-generated list as string.'''
         if x:
@@ -236,101 +198,144 @@ class SerializerClass(object):
             if t != 1: args = (s, e, t)
             elif s != 0: args = (s, e)
             else: args = (e,)
-            return self.__serialIterable(args, level, p)
-        return "z"
+            return self.__serialIterable(args, level, p, self.__serializer[types.IntType])
         return "%sz" % p
-        
-    def __serialIterable(self, x, level, p = "p"):
+
+    def __serialIterable(self, x, level, p, dumper):
         '''Serializer for iterables.
-        
+
         Args:
             x: iterable.
             level: current recursion level.
-            p: string which will be prepended to output. Defaults to p (tuple).
-            
+            p: string which will be prepended to output.
+            dumper: parser will be used for elements.
+
         Returns:
             Serialized iterable as string.'''
         if x:
             nl = level + 1
             sep = ";%d;" % level
-            return "%s%s" % (p, sep.join(self.__dumps(i, nl) for i in x))
+            return "%s%s" % (p, sep.join(dumper(self, i, nl) for i in x))
         return p
-        
+
+    def __serialDict(self, x, level, p = "d"):
+        '''Serializer for dict-likes.
+
+        Args:
+            x: iterable.
+            level: current recursion level.
+            p: string which will be prepended to output.
+               Defaults to d (dict).
+
+        Returns:
+            Serialized iterable as string.'''
+        if x:
+            nl = level + 1
+            sep = ";%d;" % level
+            return "%s%s" % (
+                p, sep.join(
+                    "%s%s%s" % (
+                        self.__dumps(k, nl),
+                        sep,
+                        self.__dumps(v, nl)
+                        ) for k, v in x.iteritems()))
+        return p
+
+    def __serialList(self, x, level, p = "l"):
+        '''Serializer for lists. We take care of range-generated lists
+        if self.select_range is True.
+
+        Args:
+            x: iterable.
+            level: current recursion level.
+            p: string which will be prepended to output.
+               Defaults to l (list).
+
+        Returns:
+            Serialized iterable as string.'''
+        if (self.__detect_range and len(x) > 1 and isinstance(x[0], int)
+            and isinstance(x[1], int) and isinstance(x[-1], int) and
+            x == range(x[0], x[-1] + (x[1]-x[0]), x[1]-x[0])):
+            return self.__serialRange(x, level, "r")
+        return self.__serialIterable(x, level, "l", self.__class__.__dumps)
+
+    def __serialInstance(self, x, level, p = "o"):
+        '''Serialize class object.
+
+        Args:
+            x: class object instance.
+            l: current recursion level, defaults to 0.
+            p: string which will be prepended to output.
+               Defaults to o (object).
+
+        Returns:
+            Serialized instance as string.'''
+        try:
+            return "%s%s:%s" % (
+                p,
+                self.__escape(self.__classAlias[x.__class__]),
+                self.__dumps(self.__classGetState[x.__class__](x), level)
+                )
+        except KeyError:
+            raise ClassRegistrarionError,"%s not registered" % x.__class__.__name__
+
+    __serializer = {
+        types.BooleanType:lambda self,x,l:"t" if x else "f",
+        types.ComplexType:lambda self,x,l:"j%g%s%g" % (x.real, "" if x.imag < 0 else "+", x.imag),
+        types.DictProxyType:__serialDict,
+        types.DictType:__serialDict,
+        types.FloatType:lambda self,x,l:"a%g" % x,
+        types.GeneratorType:lambda self,x,l:self.__serialIterable(x, l, "c", self.__class__.__dumps),
+        types.InstanceType:__serialInstance,
+        types.IntType:lambda self,x,l:"z" if x == 0 else "i%d" % x,
+        types.ListType:__serialList,
+        types.LongType:lambda self,x,l:"g%g" % x,
+        types.NoneType:lambda self,x,l: "n",
+        types.StringType:lambda self,x,l:"s%s" % self.__escape(x),
+        types.TupleType:lambda self,x,l:self.__serialIterable(x, l, "p", self.__class__.__dumps),
+        types.UnicodeType:lambda self,x,l:"u%s" % self.__escape(x).encode('unicode_escape'),
+        types.XRangeType:__serialRange,
+        }
 
     def __dumps(self, x, level = 0):
         '''Recursive _dump (aka. serializer) function.
-        
+
         Args:
             x: serializable object.
             level: current recursion level, defaults to 0.
-            
+
         Returns:
             Serialized object as string.'''
-        nl = level +1
-        if hasattr(x,"__getstate__"):
-            return "o%s" % Classes.serial(x, self.__dumps, level)
-        elif isinstance(x, basestring):
-            if isinstance(x, unicode):
-                return unicode(
-                    "u%s" % escapeStr(x)).encode('unicode_escape')
-            elif isinstance(x, str):
-                return "s%s" % escapeStr(x)
-        elif hasattr(x,"__nonzero__"):
-            if isinstance(x, bool):
-                if x: return "t"
-                return "f"
-            elif isinstance(x, int):
-                if x: return "i%s" % x
-                return "z" # Zero is the most common integer in the world
-            elif isinstance(x, float):
-                return "a%s" % x
-            elif isinstance(x, long):
-                return "g%s" % x
-            elif isinstance(x, complex):
-                return "j%s" % x
-        elif hasattr(x,"__iter__"):
-            if isinstance(x, dict):
-                return self.__serialIterable(x.iteritems(), level, "d")
-            elif isinstance(x, xrange):
-                return self.__serialRange(x, level, "x")
-            elif isinstance(x, tuple):
-                return self.__serialIterable(x, level, "p")
-            elif isinstance(x, list):
-                if x:
-                    ''' We need to check x every time, due range detection
-                        behavior, so we will use it to detect also empty lists
-                        (which are a common usecase)'''
-                    if (self.detect_range and len(x) > 1 and
-                        isinstance(x[0], int) and isinstance(x[1], int)):
-                        step = x[1]-x[0]
-                        if x == range(x[0], x[-1]+step, step):
-                            return self.__serialRange(x, level, "r")
-                    return self.__serialIterable(x, level, "l")
-                return "l"
-        elif x is None:
-            return "n"
+        tx = type(x)
+        if tx in self.__serializer:
+            return self.__serializer[tx](self, x, level)
+        if tx in self.__classAlias:
+            return self.__serialInstance(x, level)
+        for px in x.__class__.__mro__:
+            if px in self.__serializer:
+                return self.__serializer[px](self, x, level)
         raise SerializationError, "Non serializable object: %s" % type(x)
 
     def dumps(self, x, protocol = None):
         '''Converts any serializable object to string.
-        
+
         Args:
             x: serializable object.
             protocol: dummy arg for pickler interchangeability.
-            
+
         Returns:
             Serialized object as string.
         '''
-        return self.__dumps(x)
+        return "%s:%s" % (__version__, self.__dumps(x))
 
     def __liter(self, x, level):
-        '''Generates a python iterable from serialized string with level
+        '''Generates a python generator from serialized string with level
         separators.
-        
+
         Args:
             x: serialized iterable.
             level: current recursion level.
-            
+
         Returns:
             Python generator (iterable).'''
         if x:
@@ -338,36 +343,94 @@ class SerializerClass(object):
             return (self.__loads(i, nl) for i in x.split(";%d;" % level))
         return ()
 
+    def __ldict(self, x, level):
+        '''Generates a python dict from serialized string with level
+        separators.
+
+        Args:
+            x: serialized iterable.
+            level: current recursion level.
+
+        Returns:
+            Python dict.'''
+        if x:
+            nl = level+1
+            se = iter(x.split(";%d;" % level))
+            return {self.__loads(s, nl): self.__loads(se.next(), nl) for s in se}
+        return {}
+
+    def __linstance(self, x, level):
+        '''Unserialize class object.
+
+        Args:
+            x: serialized object string.
+            l: current recursion level, defaults to 0.
+
+        Returns:
+            Class object instance.'''
+        s = x.find(":")
+        try:
+            cls = self.__aliasClass[self.__unescape(x[:s])]
+            obj = cls.__new__(cls) if hasattr(cls,"__new__") else types.InstanceType(cls)
+            self.__classSetState[cls](obj, self.__loads(x[s+1:], level))
+            return obj
+        except KeyError:
+            raise ClassRegistrarionError," %s is not registered." % x[:s]
+
+    def __escape(self, x):
+        '''Escapes reserved chars:
+            & used for scaped chars.
+            ; used for item separators.
+            : used for classes.
+
+        Args:
+            x: string will be escaped.
+
+        Returns:
+            Escaped string.'''
+        return x.replace("&","&a").replace(";","&c").replace(":","&d")
+
+    def __unescape(self, x):
+        '''Unescapes reserved chars. See `SerializerClass.__escape`.
+
+        Args:
+            x: string to be escaped.
+
+        Returns:
+            Unescaped string.'''
+        return x.replace("&d",":").replace("&c",";").replace("&a","&")
+
     __parser = {
-        "s":lambda self,x,l:unescapeStr(x[1:]),
-        "u":lambda self,x,l:unescapeStr(x[1:]).decode('unicode_escape'),
+        "s":lambda self,x,l:self.__unescape(x),
+        "u":lambda self,x,l:self.__unescape(x).decode('unicode_escape'),
         "t":lambda self,x,l:True,
         "f":lambda self,x,l:False,
         "n":lambda self,x,l:None,
         "z":lambda self,x,l:0,
-        "i":lambda self,x,l:int(x[1:]),
-        "a":lambda self,x,l:float(x[1:]),
-        "g":lambda self,x,l:long(x[1:]),
-        "j":lambda self,x,l:complex(x[1:]),
-        "x":lambda self,x,l:xrange(*self.__liter(x[1:], l)),
-        "r":lambda self,x,l:range(*self.__liter(x[1:], l)),
-        "p":lambda self,x,l:tuple(self.__liter(x[1:], l)),
-        "l":lambda self,x,l:list(self.__liter(x[1:], l)),
-        "d":lambda self,x,l:dict(self.__liter(x[1:], l)),
-        "o":lambda self,x,l:Classes.unserial(x[1:], self.__loads, l)
+        "i":lambda self,x,l:int(x),
+        "a":lambda self,x,l:float(x),
+        "g":lambda self,x,l:long(x),
+        "j":lambda self,x,l:complex("%sj" % x),
+        "x":lambda self,x,l:xrange(*self.__liter(x, l)),
+        "r":lambda self,x,l:range(*self.__liter(x, l)),
+        "p":lambda self,x,l:tuple(self.__liter(x, l)),
+        "l":lambda self,x,l:list(self.__liter(x, l)),
+        "c":__liter,
+        "d":__ldict,
+        "o":__linstance
         }
 
     def __loads(self, x, level=0):
         '''Converts serialized string to Python object.
-        
+
         Args:
             x: serialized string.
             level: current recursion level. Defaults to 0.
-            
+
         Returns:
             Unserialized object.'''
         try:
-            return self.__parser[x[0]](self,x,level)
+            return self.__parser[x[0]](self, x[1:], level)
         except KeyError:
             raise UnserializationError,"String not unserializable: %s " % x
         except IndexError:
@@ -375,212 +438,45 @@ class SerializerClass(object):
         except TypeError:
             raise UnserializationError,"Cannot serialize non-strings"
 
+    __legacy_instances = {}
+    def __legacy_loads(self, x, v):
+        '''Generate and cache PRSerializer instances for legacy
+        PRSerializer formats and unserializes.
+
+        Args:
+            x: serialized string
+            v: old version definition.
+
+        '''
+        if v not in self.__legacy_instances:
+            legacy = type("LegacySerializer%s" % v, (self.__class__,), {})()
+            if v == "1.2.3":
+                legacy.__parser = self.__parser.copy()
+                legacy.__parser["d"] = lambda self, x, l: dict(self.__liter(x, l))
+                legacy.__parser["j"] = lambda self, x, l: complex(x)
+            self.__legacy_instances[v] = legacy
+        return self.__legacy_instances[v].__loads(x)
+
     def loads(self, x):
         '''Converts serialized string to Python object.
-        
+
         Args:
             x: serialized string.
-            
+
         Returns:
             Unserialized object.'''
-        return self.__loads(x)
-        
-def escapeStr(x):
-    '''Escapes reserved chars:
-        & used for scaped chars.
-        ; used for item separators.
-        : used for classes.
-    
-    Args:
-        x: string will be escaped.
-        
-    Returns:
-        Escaped string.'''
-    return x.replace("&","&a").replace(";","&c").replace(":","&d")
+        version = x.split(":")[0] if x[0].isdigit() else "1.2.3" # Version data was added on 1.2.4
+        if version == __version__:
+            return self.__loads(x[len(version)+1:])
+        return self.__legacy_loads(x, version)
 
-def unescapeStr(x):
-    '''Unescapes reserved chars. See `SerializerClass.__scapeStr`.
-    
-    Args:
-        x: string to be escaped.
-        
-    Returns:
-        Unescaped string.'''
-    return x.replace("&d",":").replace("&c",";").replace("&a","&")
 
+# Serializer object
 Serializer = SerializerClass()
 
 # Top level module methods
-serializable = Classes.serializable # register's class decorator
-register = Classes.register
+serializable = Serializer.serializable # register's class decorator
+register = Serializer.serializable
 loads = Serializer.loads
 dumps = Serializer.dumps
-
-if __name__=="__main__":
-    from time import time
-    from string import ascii_letters, digits
-    from pickle import dumps as pdumps, loads as ploads
-    from zlib import compress, decompress
-    class DictInherited(dict):
-        ''' This class inherits from dict, if not registered will be
-            converted to dict when serializes '''
-        pass
-    class NewStyleClass(object):
-        ''' This class inherits from object, so it's a new-style class,
-            it's __new__ method will be called (instead of __init__)
-            before __setstate__ , when unserializes.
-
-            Must be registered and it requires both __getstate__
-            and __setstate__ methods for class registration.
-            '''
-        a = True
-        b = False
-        def __new__(self):
-            ''' NewStyleClass __new__ will be called twice '''
-            return object.__new__(self)
-        def __init__(self):
-            ''' NewStyleClass __init__ will be only called once '''
-            pass
-        def __getstate__(self):
-            ''' Must return a serializable object which
-                will be serialized '''
-            return {"a":self.a,"b":self.b}
-        def __setstate__(self, obj):
-            ''' This method will handle unserialized data
-                ( as returned by __getstate__ ) '''
-            self.a = obj["a"]
-            self.b = obj["b"]
-    class OldStyleClass:
-        ''' This class is an old-style class, it's __init__ method will
-            be called prior to it's __setstate__ method .
-            Remember you can create an __new__ method by hand if you
-            want to prevent __init__ will be called when unserializes.
-
-            Must be registered and must have both __setstate__ and
-            __getstate__ methods.
-            '''
-        def __init__(self):
-            '''OldStyleClass __init__ will be called twice'''
-            pass
-        def __getstate__(self):
-            return None
-        def __setstate__(self,x):
-            pass
-    # Registering NewStyleClass, you can specify an alias if you want
-    Classes.register(NewStyleClass, alias="NewStyled")
-    # Registering OldStyleClass
-    Classes.register(OldStyleClass)
-    # Performance test
-    a = DictInherited()
-    loop0_range = xrange(1000)
-    loop1_range = xrange(50)
-    loop2_range = xrange(50)
-    str1 = "a:a,a;0;a'''aa'" # for escape tests
-    xra1 = xrange(1,100,2)
-    for i in loop0_range:
-        key = i
-        a[key] = [str1,xra1,[]]
-        for j in loop1_range:
-            o = NewStyleClass()
-            o.a = i < 500
-            o.b = i > 499
-            a[key].append(o)
-        a[key].append(OldStyleClass())
-        for j in loop2_range:
-            a[key].append((True, False, ascii_letters+digits,i))
-
-    print "Performance test: serializing, unserializing, zlib compression and pickle"
-    print "  1 dict"
-    print "    %d lists (%d are empty)" % (len(loop0_range)*2,len(loop0_range))
-    print "      %d integers (%d are dictionary keys)" % (len(loop0_range)*len(loop2_range)*2,len(loop0_range))
-    print "      %d strings" %(len(loop0_range)*len(loop1_range)+len(loop0_range)*len(loop2_range))
-    print "      %d objects" %(len(loop0_range)*len(loop1_range)+len(loop0_range))
-    print "      %d booleans" %(len(loop0_range)*len(loop2_range)*2)
-    print
-    t0 = time()
-    b = Serializer.dumps(a)
-    t1 = time()
-    c = Serializer.loads(b)
-    t2 = time()
-    d = compress(b,9)
-    t3 = time()
-
-    print "Serializing time:   %fs ( %d bytes )" % (t1-t0,len(b))
-    try:
-        print "Unserializing time: %fs ( %2f B/s )" % (t2-t1, len(b)/(t2-t1))
-    except ZeroDivisionError:
-        print "Unserializing time: %fs ( %2f B/s )" % (t2-t1, len(b))
-    print "Zlib compress time: %fs ( %d bytes )" % (t3-t2,len(d))
-    t0 = time()
-    b = pdumps(a,-1)
-    t1 = time()
-    c = ploads(b)
-    t2 = time()
-    d = compress(b,9)
-    t3 = time()
-    print
-    print "Pickling time:      %fs ( %d bytes )" % (t1-t0,len(b))
-    try:
-        print "Unpickling time:    %fs ( %2f B/s )" % (t2-t1, len(b)/(t2-t1))
-    except ZeroDivisionError:
-        print "Unpickling time:    %fs ( %2f B/s )" % (t2-t1, len(b))
-    print "Zlib compress time: %fs ( %d bytes )" % (t3-t2,len(d))
-
-    print
-    print "range vs xrange performance"
-    r =  range(10000)
-    x = xrange(10000)
-    u = ["a%d" % i for i in x]
-    l = [4,2,3,5]+range(len(r)-4)
-    d = {"range(%d)" % len(r):r,"xrange(%d)" % len(x):x,"str list(%d)" % len(u):u,"unordered list2 (%d)" % len(l):l}
-    for i, j in d.items():
-        t0 = time()
-        b = Serializer.dumps(j)
-        t1 = time()
-        c = Serializer.loads(b)
-        t2 = time()
-        print "%s : serializing %fs, unserializing %fs" % (i,t1-t0,t2-t1)
-
-    Serializer.detect_range = False
-    print "deactivating auto range detection"
-    for i, j in d.items():
-        t0 = time()
-        b = Serializer.dumps(j)
-        t1 = time()
-        c = Serializer.loads(b)
-        t2 = time()
-        print "%s : serializing %fs, unserializing %fs" % (i,t1-t0,t2-t1)
-
-    print
-    print "range detection algorithm tests"
-    def way1(x):
-        if len(x)>1 and isinstance(x[0],int) and isinstance(x[1],int):
-            last = x[1]
-            step = last-x[0]
-            e = True
-            for i in x[2:]:
-                if isinstance(i,int) and (last+step) == i:
-                    last = i
-                else:
-                    e = False
-                    return False
-            return True
-        return False
-
-    def way2(x):
-        if len(x)>1 and isinstance(x[0],int) and isinstance(x[1],int):
-            step = x[1]-x[0]
-            return x == range( x[0], x[-1] + step, step )
-        return False
-
-    l1 = range(10000)
-    for i,j in (("way1",way1),("way2",way2)):
-        t0 = time()
-        o = j(l1)
-        t1 = time()
-        print i, o, (t1-t0), "seconds"
-
-
-
-
 
