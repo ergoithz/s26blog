@@ -105,6 +105,8 @@ Example:
 
 import sys
 import types
+import itertools
+import zlib
 
 __author__ = "Felipe A. Hernandez"
 __authemail__ = "spayder26 at gmail dot com"
@@ -127,13 +129,15 @@ class SerializerClass(object):
     '''Serializer and unserializer class.'''
 
     __detect_range = sys.version_info[0] < 3
+    __compress = 1
 
-    def __init__(self):
+    def __init__(self, compression=1):
         '''Initializes the serializer-unserializer class.'''
         self.__classAlias = {}
         self.__aliasClass = {}
         self.__classGetState = {}
         self.__classSetState = {}
+        self.__compress = compression
         
     def serializable(self, class_or_alias = None, alias = None, getstate = None, setstate = None):
         '''Mark classtype as serializable. Usable as class decorator.
@@ -155,28 +159,28 @@ class SerializerClass(object):
         if type(class_or_alias) in (types.StringType, types.NoneType):
             assert alias is None or class_or_alias is None, "Alias cannot be given twice (class_or_alias and alias parameters are both exclusives)."
             return lambda x: self.serializable(x, class_or_alias or alias, getstate, setstate)
-
+        
         if alias is None:
             alias = class_or_alias.__name__
             if alias in self.__aliasClass:
-                raise ClassRegistrarionError, "Two (or more) classes have the same name, please provide aliases."
+                raise ClassRegistrarionError, "Two classes have the same name, please provide aliases."
+        elif alias in self.__aliasClass:
+            raise ClassRegistrarionError, "Two classes have the same alias, please provide a different one."
 
         try:
             if getstate is None:
                 getstate = class_or_alias.__getstate__
         except AttributeError:
-            raise ClassRegistrarionError,"Serializable classes must have an __getstate__ method if not 'getstate' parameter is given."
+            raise ClassRegistrarionError,"Serializable classes must have an __getstate__ method if not 'getstate' parameter is given to 'serializable' decorator or method."
 
         try:
             if setstate is None:
                 setstate = class_or_alias.__setstate__
         except AttributeError:
-            raise ClassRegistrarionError,"Serializable classes must have an __setstate__ method if not 'setstate' parameter is given."
+            raise ClassRegistrarionError,"Serializable classes must have an __setstate__ method if not 'setstate' parameter is given to 'serializable' decorator or method."
 
-        self.__classAlias[class_or_alias] = alias
-        self.__classGetState[class_or_alias] = getstate
-        self.__classSetState[class_or_alias] = setstate
-        self.__aliasClass[alias] = class_or_alias
+        self.__classAlias[class_or_alias] = alias, getstate
+        self.__aliasClass[alias] = class_or_alias, setstate
 
         return class_or_alias
 
@@ -232,13 +236,9 @@ class SerializerClass(object):
         if x:
             nl = level + 1
             sep = ";%d;" % level
-            return "%s%s" % (
-                p, sep.join(
-                    "%s%s%s" % (
-                        self.__dumps(k, nl),
-                        sep,
-                        self.__dumps(v, nl)
-                        ) for k, v in x.iteritems()))
+            return "%s%s" % (p, sep.join(
+                "%s%s%s" % (self.__dumps(k, nl), sep, self.__dumps(v, nl))
+                for k, v in x.iteritems()))
         return p
 
     def __serialList(self, x, level, p = "l"):
@@ -271,10 +271,10 @@ class SerializerClass(object):
         Returns:
             Serialized instance as string.'''
         try:
-            return "%s%s:%s" % (
-                p,
-                self.__escape(self.__classAlias[x.__class__]),
-                self.__dumps(self.__classGetState[x.__class__](x), level)
+            alias, getstate = self.__classAlias[x.__class__]
+            return "%s%s:%s" % (p,
+                self.__escape(alias),
+                self.__dumps(getstate(x), level)
                 )
         except KeyError:
             raise ClassRegistrarionError,"%s not registered" % x.__class__.__name__
@@ -326,7 +326,10 @@ class SerializerClass(object):
         Returns:
             Serialized object as string.
         '''
-        return "%s:%s" % (__version__, self.__dumps(x))
+        data = self.__dumps(x)
+        if self.__compress:
+            data = "y%s" % zlib.compress(data, self.__compress)
+        return "%s:%s" % (__version__, data)
 
     def __liter(self, x, level):
         '''Generates a python generator from serialized string with level
@@ -369,10 +372,16 @@ class SerializerClass(object):
         Returns:
             Class object instance.'''
         s = x.find(":")
+        
+        cls, setstate = self.__aliasClass[self.__unescape(x[:s])]
+        obj = cls.__new__(cls) if hasattr(cls,"__new__") else types.InstanceType(cls)
+        setstate(obj, self.__loads(x[s+1:], level))
+        return obj
+        
         try:
-            cls = self.__aliasClass[self.__unescape(x[:s])]
+            cls, setstate = self.__aliasClass[self.__unescape(x[:s])]
             obj = cls.__new__(cls) if hasattr(cls,"__new__") else types.InstanceType(cls)
-            self.__classSetState[cls](obj, self.__loads(x[s+1:], level))
+            setstate(obj, self.__loads(x[s+1:], level))
             return obj
         except KeyError:
             raise ClassRegistrarionError," %s is not registered." % x[:s]
@@ -401,6 +410,7 @@ class SerializerClass(object):
         return x.replace("&d",":").replace("&c",";").replace("&a","&")
 
     __parser = {
+        "y":lambda self,x,l:self.__loads(zlib.decompress(x), l),
         "s":lambda self,x,l:self.__unescape(x),
         "u":lambda self,x,l:self.__unescape(x).decode('unicode_escape'),
         "t":lambda self,x,l:True,

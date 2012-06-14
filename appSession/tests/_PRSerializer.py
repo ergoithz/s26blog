@@ -5,7 +5,7 @@ import sys, os.path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from PRSerializer import Serializer
-from _old_PRSerializer import Serializer as OldSerializer
+from _old_PRSerializer import Serializer as OldSerializer, register as old_serializable
 
 def legacy_compatibility():
     legacy = OldSerializer.dumps({"a":{"b":1},(1,1):2})
@@ -29,11 +29,12 @@ if True:
     from pickle import dumps as pdumps, loads as ploads
     from zlib import compress, decompress
     from PRSerializer import serializable
+    
     class DictInherited(dict):
         ''' This class inherits from dict, if not registered will be
             converted to dict when serializes '''
         pass
-
+    
     @serializable("NewStyled") # Registering NewStyleClass, you can specify an alias if you want
     class NewStyleClass(object):
         ''' This class inherits from object, so it's a new-style class,
@@ -60,6 +61,8 @@ if True:
                 ( as returned by __getstate__ ) '''
             self.a = obj["a"]
             self.b = obj["b"]
+    
+    old_serializable(NewStyleClass, "NewStyled")
 
     @serializable # Registering OldStyleClass
     class OldStyleClass:
@@ -79,6 +82,8 @@ if True:
         def __setstate__(self,x):
             pass
 
+    old_serializable(OldStyleClass)
+
     # Performance test
     a = DictInherited()
     loop0_range = xrange(1000)
@@ -97,8 +102,6 @@ if True:
         a[key].append(OldStyleClass())
         for j in loop2_range:
             a[key].append((True, False, ascii_letters+digits,i))
-
-    
     
     print "Performance test: serializing, unserializing, zlib compression and pickle"
     print "  1 dict"
@@ -114,29 +117,23 @@ if True:
     t1 = time()
     c = Serializer.loads(b)
     t2 = time()
-    d = compress(b,9)
-    t3 = time()
     
     print "Serializing time:   %fs ( %d bytes )" % (t1-t0,len(b))
     try:
         print "Unserializing time: %fs ( %2f B/s )" % (t2-t1, len(b)/(t2-t1))
     except ZeroDivisionError:
         print "Unserializing time: %fs ( %2f B/s )" % (t2-t1, len(b))
-    print "Zlib compress time: %fs ( %d bytes )" % (t3-t2,len(d))
     t0 = time()
     b = pdumps(a,-1)
     t1 = time()
     c = ploads(b)
     t2 = time()
-    d = compress(b,9)
-    t3 = time()
     print
     print "Pickling time:      %fs ( %d bytes )" % (t1-t0,len(b))
     try:
         print "Unpickling time:    %fs ( %2f B/s )" % (t2-t1, len(b)/(t2-t1))
     except ZeroDivisionError:
         print "Unpickling time:    %fs ( %2f B/s )" % (t2-t1, len(b))
-    print "Zlib compress time: %fs ( %d bytes )" % (t3-t2,len(d))
 
     print
     print "range vs xrange performance"
