@@ -24,7 +24,8 @@ Functions:
         registering the classType with given alias.
         Received classtypes must have both __getstate__ and __setstate__
         methods, __getstate__ must return a serializable object that
-        __setstate__ will receive when unserializing.
+        __setstate__ will create the class when unserializing (should be a
+        classmethod constructor, or a convenience method).
 
         Can be used as class decorator @serializable [ ( str_class_alias ) ] in Python 2.6+.
 
@@ -68,45 +69,52 @@ Notes:
     * Shorter output than pickle on old protocols (0 and 1), but a bit
       longer than last one (protocol 2 on 2.6), but works better with
       compresion.
-    * Uses only printable characters.
+    * Uses only printable characters (if no compression is chosen).
 
 Example:
-    from PRSerializer import serializable, loads, dumps
+    >>> # PRSerializer needs class registration
+    >>> @serializable("myclass")
+    ... class MyClass(object):
+    ...    foo = True
+    ...    bar = None
+    ...
+    ...    def __init__(self):
+    ...        self.foo = xrange(1000)
+    ...
+    ...    def __getstate__(self):
+    ...        # Required by PRSerializer, returned data will be serialized
+    ...        return (self.foo, self.bar)
+    ...
+    ...    @classmethod
+    ...    def __setstate__(cls,o):
+    ...        # Required by PRSerializer, this should generate the new object
+    ...        self = cls()
+    ...        self.foo = o[0]
+    ...        self.bar = o[1]
+    ...        return self
+    ...
+    ...    def __repr__(self):
+    ...        return "<MyClass object with foo=%s bar=%s>" % (
+    ...            repr(self.foo), repr(self.bar))
+    ...
+    >>> instance = MyClass()
+    >>> instance.foo = "Text string"
+    
+    >>> # Serialization
+    >>> a = dumps(instance)
+    >>> print "Serialized string:", repr(a)
+    Serialized string: '0.1.4:omyclass:psText string;0;n'
 
-    @serializable(myclass) # PRSerializer needs class registration
-    class MyClass(object):
-        foo = True
-        bar = None
-
-        def __init__(self):
-            self.foo = xrange(1000)
-
-        def __getstate__(self):
-            # Required by PRSerializer, returned data will be serialized
-            return (self.foo, self.bar)
-
-        def __setstate__(self,o):
-            # Required by PRSerializer, this will be called instead
-            # __init__ with unserialized data.
-            self.foo = o[0]
-            self.bar = o[1]
-
-    instance = MyClass()
-    instance.foo = "Text string"
-
-    # Serialization
-    a = dumps(instance)
-    print "Serialized string:", repr(a)
-
-    # Unserialization
-    b = loads(a)
-    print "Instance:", repr(b)
+    >>> # Unserialization
+    >>> b = loads(a)
+    >>> print "Instance:", repr(b)
+    Instance: <MyClass object with foo='Text string' bar=None>
 '''
 
 import sys
 import types
 import itertools
-import zlib
+import 
 
 __author__ = "Felipe A. Hernandez"
 __authemail__ = "spayder26 at gmail dot com"
@@ -129,15 +137,16 @@ class SerializerClass(object):
     '''Serializer and unserializer class.'''
 
     __detect_range = sys.version_info[0] < 3
-    __compress = 1
 
-    def __init__(self, compression=1):
+    compression = 1
+    def __init__(self, compression = 0):
         '''Initializes the serializer-unserializer class.'''
         self.__classAlias = {}
         self.__aliasClass = {}
         self.__classGetState = {}
         self.__classSetState = {}
-        self.__compress = compression
+        
+        self.compression = compression
         
     def serializable(self, class_or_alias = None, alias = None, getstate = None, setstate = None):
         '''Mark classtype as serializable. Usable as class decorator.
@@ -212,7 +221,7 @@ class SerializerClass(object):
             x: iterable.
             level: current recursion level.
             p: string which will be prepended to output.
-            dumper: parser will be used for elements.
+            dumper: parser will be used for elements (unbounded).
 
         Returns:
             Serialized iterable as string.'''
@@ -237,8 +246,9 @@ class SerializerClass(object):
             nl = level + 1
             sep = ";%d;" % level
             return "%s%s" % (p, sep.join(
-                "%s%s%s" % (self.__dumps(k, nl), sep, self.__dumps(v, nl))
-                for k, v in x.iteritems()))
+                    "%s%s%s" % (self.__dumps(k, nl), sep, self.__dumps(v, nl))
+                    for k, v in x.iteritems())
+                    )
         return p
 
     def __serialList(self, x, level, p = "l"):
@@ -327,9 +337,8 @@ class SerializerClass(object):
             Serialized object as string.
         '''
         data = self.__dumps(x)
-        if self.__compress:
-            data = "y%s" % zlib.compress(data, self.__compress)
-        return "%s:%s" % (__version__, data)
+        if self.compression == 0: return "%s:%s" % (__version__, data)
+        return "%s:y%s" % (__version__, zlib.compress(data, self.compression))
 
     def __liter(self, x, level):
         '''Generates a python generator from serialized string with level
@@ -371,20 +380,19 @@ class SerializerClass(object):
 
         Returns:
             Class object instance.'''
-        s = x.find(":")
-        
-        cls, setstate = self.__aliasClass[self.__unescape(x[:s])]
-        obj = cls.__new__(cls) if hasattr(cls,"__new__") else types.InstanceType(cls)
-        setstate(obj, self.__loads(x[s+1:], level))
-        return obj
-        
+        alias, data = x.split(":", 1)
         try:
-            cls, setstate = self.__aliasClass[self.__unescape(x[:s])]
-            obj = cls.__new__(cls) if hasattr(cls,"__new__") else types.InstanceType(cls)
-            setstate(obj, self.__loads(x[s+1:], level))
+            cls, setstate = self.__aliasClass[self.__unescape(alias)]
+            if setstate.im_self:
+                # Is bounded
+                obj = setstate(self.__loads(data, level))
+            else:
+                # Needs an instance
+                obj = cls.__new__(cls) if hasattr(cls,"__new__") else types.InstanceType(cls)
+                setstate(obj, self.__loads(data, level))
             return obj
         except KeyError:
-            raise ClassRegistrarionError," %s is not registered." % x[:s]
+            raise ClassRegistrarionError," %s is not registered." % alias
 
     def __escape(self, x):
         '''Escapes reserved chars:
@@ -475,7 +483,7 @@ class SerializerClass(object):
 
         Returns:
             Unserialized object.'''
-        version = x.split(":")[0] if x[0].isdigit() else "1.2.3" # Version data was added on 1.2.4
+        version = x.split(":", 1)[0] if x[0].isdigit() else "1.2.3" # Version data was added on 1.2.4
         if version == __version__:
             return self.__loads(x[len(version)+1:])
         return self.__legacy_loads(x, version)
