@@ -1,4 +1,4 @@
-Raw HTML Parser
+Raw xHTML Parser
 ===============
 it's a pure JavaScript SAX-like HTML/XHTML parser  licensed under Mozilla Public License.
 
